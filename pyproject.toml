@@ -3,5 +3,14 @@ name = "media-sources"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = []
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "colorlog>=6.10.1",
+    "numpy>=2.2.6",
+    "opencv-python",
+    "pytz>=2026.2",
+    "yt-dlp>=2026.6.9",
+]
+
+[tool.uv.sources]
+opencv-python = { path = "../../builds/opencv-python-gstreamer/wheelhouse/opencv_python-4.13.0.92-cp310-cp310-macosx_15_0_arm64.whl" }

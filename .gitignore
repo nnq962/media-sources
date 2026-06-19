@@ -71,3 +71,7 @@ htmlcov/
 *.swp
 *.swo
 *.swn
+
+# Folder
+examples/
+weights/
