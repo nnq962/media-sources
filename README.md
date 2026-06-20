@@ -1,22 +1,10 @@
 # media-sources
 
-`media-sources` chuẩn hóa cách đọc dữ liệu từ nhiều nguồn media khác nhau và trả ra frame theo từng
-vòng lặp, để phần xử lý AI phía sau (YOLO, RetinaFace, các pipeline ảnh/video…) làm việc với một giao
-diện thống nhất. Đầu vào luôn được xử lý theo **batch** và trả frame kèm metadata theo đúng thứ tự nguồn.
+`media-sources` giúp đọc frame từ nhiều loại nguồn media bằng một interface thống nhất:
+ảnh, numpy array, video file, webcam, RTSP/RTMP và YouTube.
 
-## Nguồn đầu vào hỗ trợ
-
-| Loại | Ví dụ | Ghi chú |
-|---|---|---|
-| Ảnh (path) | `"img.jpg"` | lặp 1 lần |
-| Ảnh (`numpy.ndarray`) | `frame` | tự chuẩn hóa về BGR 3-channel |
-| Video (path) | `"clip.mp4"` | lặp đến hết file |
-| Webcam | `0`, `1` | stream vô hạn |
-| RTSP / RTMP | `"rtsp://..."` | stream vô hạn, auto-reconnect |
-| YouTube | `"https://youtu.be/..."` | resolve qua `yt-dlp` |
-
-> **Batch luôn đồng nhất:** mọi phần tử trong một batch phải cùng loại. Trộn loại
-> (vd `["a.mp4", "b.jpg"]`) sẽ raise `ValueError` ngay khi khởi tạo.
+Mục tiêu chính của project là phục vụ các pipeline computer vision như YOLO, RetinaFace,
+tracking, OCR hoặc các task inference cần nhận `list[numpy.ndarray]` theo batch.
 
 ## Cài đặt
 
@@ -24,173 +12,308 @@ diện thống nhất. Đầu vào luôn được xử lý theo **batch** và tr
 uv sync
 ```
 
-## Bắt đầu nhanh
+Mặc định project cài `opencv-python` từ PyPI. Bản này có thể không được build kèm
+GStreamer tùy nền tảng.
 
-### Batch nhiều nguồn — `MediaSources`
+Nếu cần RTSP low-latency qua GStreamer, hãy tự build OpenCV wheel có GStreamer trên máy
+deploy rồi cài đè vào venv:
+
+```bash
+uv pip install --force-reinstall /path/to/opencv_python-*.whl
+```
+
+Kiểm tra OpenCV hiện tại có GStreamer hay không:
+
+```bash
+uv run python - <<'PY'
+import cv2
+print("GStreamer: YES" if "GStreamer:                   YES" in cv2.getBuildInformation() else "GStreamer: NO")
+PY
+```
+
+Nếu OpenCV không có GStreamer, `RtspReader` vẫn fallback sang FFMPEG.
+
+## Dùng nhanh với nhiều nguồn
+
+Dùng `MediaSources` khi bạn muốn đọc một hoặc nhiều nguồn theo batch.
 
 ```python
 from media_sources import MediaSources
-from media_sources.utils import set_logging
 
-set_logging()  # (tuỳ chọn) bật log màu mức INFO
-
-sources = ["rtsp://cam1", "rtsp://cam2"]
+sources = [
+    "rtsp://cam1",
+    "rtsp://cam2",
+]
 
 with MediaSources(sources) as ms:
     for frames, infos in ms:
-        # frames[0] là frame hiện tại của cam1, frames[1] của cam2
-        # infos[i] là metadata tương ứng với frames[i]
+        # frames[0] là frame mới nhất của cam1
+        # frames[1] là frame mới nhất của cam2
         results = model.predict(frames)
 ```
 
-Mỗi vòng lặp trả về `(frames, infos)`:
-- `frames`: `list[numpy.ndarray]` (BGR 3-channel), đúng thứ tự nguồn đầu vào.
-- `infos`: `list[SourceMeta]` tương ứng theo index — `frames[i]` ↔ `infos[i]` ↔ `sources[i]`.
+Mỗi vòng lặp trả về:
 
-### Nguồn đơn — `create_media_source`
+```python
+frames, infos
+```
 
-`create_media_source()` là factory cấp thấp hơn, trả về một **reader đơn nguồn** (`BaseReader`) hoặc
-batch tùy theo đầu vào. Dùng khi cần tái sử dụng reader độc lập hoặc tích hợp trực tiếp:
+Trong đó:
+
+- `frames`: `list[numpy.ndarray]`, frame BGR 3-channel, đúng thứ tự `sources`.
+- `infos`: `list[SourceMeta]`, metadata tương ứng với từng frame.
+
+Quan hệ index luôn được giữ:
+
+```python
+frames[i] <-> infos[i] <-> sources[i]
+```
+
+## Một nguồn cũng là batch
+
+`MediaSources` luôn trả về batch, kể cả khi bạn truyền một nguồn.
+
+```python
+from media_sources import MediaSources
+
+with MediaSources("video.mp4") as ms:
+    for frames, infos in ms:
+        frame = frames[0]
+        info = infos[0]
+        process(frame)
+```
+
+Nếu bạn muốn API đọc một nguồn trả thẳng `frame, meta`, xem phần `create_media_source`.
+
+## Realtime camera: lấy frame mới nhất
+
+Với `RTSP`, `RTMP` và `webcam`, `MediaSources` dùng background thread cho từng nguồn.
+Nếu model chạy chậm hơn camera, frame cũ sẽ bị bỏ để giữ realtime.
+
+Ví dụ camera 25 FPS nhưng model mất 500ms:
+
+```python
+with MediaSources(["rtsp://cam1", "rtsp://cam2"]) as ms:
+    for frames, infos in ms:
+        model.predict(frames)
+```
+
+Trong lúc model đang chạy, reader vẫn đọc frame mới ở nền. Khi vòng lặp quay lại, bạn nhận
+batch mới nhất, không bị backlog các frame cũ.
+
+Lưu ý hiện tại: với nhiều stream, batch chỉ được trả khi tất cả nguồn đều có frame mới hơn
+lần trả trước. Nếu một camera bị chậm hoặc mất tín hiệu, toàn bộ batch có thể chờ hoặc raise
+`StreamError`.
+
+## Video và ảnh: đọc tuần tự
+
+Với video file, image và YouTube video, batch được đọc theo kiểu lockstep.
+
+```python
+with MediaSources(["video1.mp4", "video2.mp4"]) as ms:
+    for frames, infos in ms:
+        # mỗi vòng đọc frame kế tiếp từ mọi video
+        results = model.predict(frames)
+```
+
+Không có frame bị drop. Nếu model chậm, tốc độ đọc video sẽ chậm theo.
+
+## Các loại nguồn hỗ trợ
+
+| Loại | Ví dụ | Cách đọc |
+|---|---|---|
+| Ảnh path | `"image.jpg"` | đọc một lần |
+| Ảnh numpy | `np.ndarray` | chuẩn hóa về BGR |
+| Video file | `"clip.mp4"` | đọc tuần tự đến hết file |
+| Webcam | `0`, `1` | stream realtime |
+| RTSP / RTMP | `"rtsp://..."` | stream realtime, có reconnect |
+| YouTube | `"https://youtu.be/..."` | resolve bằng `yt-dlp` rồi đọc như video |
+
+Batch phải đồng nhất loại nguồn. Ví dụ này không hợp lệ:
+
+```python
+MediaSources(["video.mp4", "image.jpg"])
+```
+
+Nếu trộn nhiều loại nguồn trong cùng một batch, project sẽ raise `ValueError` khi khởi tạo.
+
+## `MediaSources` hay `create_media_source`?
+
+Dùng `MediaSources` cho pipeline vision thông thường.
+
+```python
+with MediaSources(["cam1", "cam2"]) as ms:
+    for frames, infos in ms:
+        model.predict(frames)
+```
+
+`MediaSources`:
+
+- Luôn trả batch: `frames, infos`.
+- Dùng tốt cho nhiều camera/video.
+- Có context manager để tự mở và đóng tài nguyên.
+- Không expose trực tiếp `.open()` và `.read()`.
+
+Dùng `create_media_source` khi bạn muốn reader cấp thấp hơn.
+Với một nguồn đơn, bạn có thể tự gọi `open/read/close`.
 
 ```python
 from media_sources import create_media_source
 
-# Nguồn đơn → BaseReader với interface open/read/close
-reader = create_media_source("rtsp://cam1", reconnect_forever=True)
+reader = create_media_source("video.mp4")
 
-with reader:                              # lazy open: kết nối tại đây
-    result = reader.read()                # trả (frame, SourceMeta) hoặc None khi hết/lỗi
-    if result:
-        frame, meta = result
-        print(meta.resolution, meta.fps)
+reader.open()
 
-# Hoặc iterate trực tiếp trên reader đơn
-for frame, meta in create_media_source("video.mp4"):
+while True:
+    result = reader.read()
+    if result is None:
+        break
+
+    frame, meta = result
     process(frame)
 
-# List nguồn → batch (StreamBatchReader hoặc SyncBatchReader tùy loại)
-batch = create_media_source(["rtsp://cam1", "rtsp://cam2"])
-with batch:
-    for frames, infos in batch:
-        ...
+reader.close()
 ```
 
-> **Lazy open:** `create_media_source()` và `MediaSources()` **không** kết nối khi khởi tạo —
-> chỉ kết nối khi vào `with`, iterate lần đầu, hoặc gọi `open()` tường minh.
-
-## Ví dụ theo từng loại nguồn
+Nếu truyền một nguồn, `create_media_source(source)` trả reader đơn nguồn:
 
 ```python
-import numpy as np
-from media_sources import MediaSources, create_media_source
-
-# Ảnh path
-MediaSources(["a.jpg", "b.png"])
-
-# numpy.ndarray (grayscale/BGRA tự chuẩn hóa về BGR)
-MediaSources([np.zeros((480, 640, 3), np.uint8)])
-
-# Video
-MediaSources(["video1.mp4", "video2.mp4"])
-
-# Webcam
-MediaSources([0, 1])
-
-# RTSP (tắt GStreamer, chỉ dùng FFMPEG)
-MediaSources(["rtsp://cam1"], use_gstreamer=False)
-
-# YouTube
-MediaSources(["https://youtu.be/vCIc1g_4JWM"])
-
-# Nguồn đơn — reader độc lập tái sử dụng được
-reader = create_media_source("rtsp://cam1")
-with reader:
-    frame, meta = reader.read()
+frame, meta = reader.read()
 ```
 
-## Metadata — `SourceMeta`
+Nếu truyền list, `create_media_source(list_sources)` trả batch reader. Batch reader có
+`open/close` và iterate được:
+
+```python
+batch = create_media_source(["rtsp://cam1", "rtsp://cam2"])
+
+with batch:
+    for frames, infos in batch:
+        process(frames)
+```
+
+## Lazy open
+
+`MediaSources(...)` và `create_media_source(...)` không kết nối ngay lúc khởi tạo.
+Nguồn chỉ được mở khi:
+
+- vào `with`;
+- iterate lần đầu;
+- hoặc gọi `open()` trực tiếp với reader/batch từ `create_media_source`.
+
+Ví dụ:
+
+```python
+ms = MediaSources(["rtsp://cam1", "rtsp://cam2"])
+# chưa kết nối camera
+
+with ms:
+    # camera được mở tại đây
+    ...
+```
+
+## Metadata
+
+Mỗi frame có một `SourceMeta` đi kèm.
 
 | Field | Kiểu | Ý nghĩa |
 |---|---|---|
-| `name` | `str` | tên file / `"webcam_0"` / URL |
-| `source_type` | `SourceType` | `IMAGE` `VIDEO` `WEBCAM` `RTSP` `YOUTUBE` |
-| `frame_index` | `int` | chỉ số frame hiện tại của nguồn |
+| `name` | `str` | tên file, webcam id hoặc URL |
+| `source_type` | `SourceType` | `IMAGE`, `VIDEO`, `WEBCAM`, `RTSP`, `YOUTUBE` |
+| `frame_index` | `int` | chỉ số frame của nguồn đó |
 | `resolution` | `tuple[int, int]` | `(width, height)` |
-| `fps` | `float \| None` | `None` với ảnh |
-| `total_frames` | `int \| None` | chỉ có với video (file) |
-| `is_stream` | `bool` | `True` với webcam/RTSP/YouTube-live |
-| `timestamp` | `float` | thời điểm đọc frame (epoch giây) |
+| `fps` | `float | None` | FPS nếu đọc được |
+| `total_frames` | `int | None` | tổng số frame, chủ yếu cho video file |
+| `is_stream` | `bool` | `True` với webcam/RTSP/live stream |
+| `timestamp` | `float` | thời điểm đọc frame, epoch seconds |
+
+Ví dụ:
 
 ```python
-from media_sources import SourceType
+from media_sources import MediaSources, SourceType
 
-for frames, infos in ms:
-    if infos[0].source_type == SourceType.RTSP:
-        ...
+with MediaSources(["rtsp://cam1"]) as ms:
+    for frames, infos in ms:
+        if infos[0].source_type == SourceType.RTSP:
+            print(infos[0].resolution)
 ```
 
-## Tuỳ chọn RTSP
+## RTSP options
 
-Truyền qua `**kwargs` của `MediaSources` hoặc `create_media_source` (kwargs thừa với loại nguồn khác
-được bỏ qua tự động, có log DEBUG):
-
-| kwarg | Mặc định | Ý nghĩa |
-|---|---|---|
-| `use_gstreamer` | `True` | thử GStreamer (low-latency) trước, fallback FFMPEG |
-| `reconnect` | `True` | tự kết nối lại khi mất tín hiệu |
-| `reconnect_delay` | `2.0` | giây chờ giữa các lần reconnect |
-| `reconnect_forever` | `True` | reconnect vô hạn (bỏ qua `max_reconnect_attempts`) |
-| `max_reconnect_attempts` | `5` | số lần thử khi `reconnect_forever=False` |
-| `open_timeout_ms` | `5000` | timeout mở kết nối (chống treo) |
-| `read_timeout_ms` | `5000` | timeout đọc frame (chống treo) |
+Các option này có thể truyền vào `MediaSources` hoặc `create_media_source`.
 
 ```python
-MediaSources(
+with MediaSources(
     ["rtsp://cam1", "rtsp://cam2"],
+    use_gstreamer=True,
+    reconnect=True,
     reconnect_forever=True,
     reconnect_delay=2.0,
-    use_gstreamer=True,
-)
+) as ms:
+    for frames, infos in ms:
+        model.predict(frames)
 ```
 
-## Xử lý lỗi
+| Option | Mặc định | Ý nghĩa |
+|---|---:|---|
+| `use_gstreamer` | `True` | thử GStreamer trước, fallback FFMPEG |
+| `reconnect` | `True` | tự reconnect khi mất tín hiệu |
+| `reconnect_delay` | `2.0` | thời gian chờ ban đầu giữa các lần reconnect |
+| `reconnect_forever` | `True` | reconnect vô hạn |
+| `max_reconnect_attempts` | `5` | số lần thử khi `reconnect_forever=False` |
+| `open_timeout_ms` | `5000` | timeout mở stream |
+| `read_timeout_ms` | `5000` | timeout đọc frame |
 
-Stream (webcam/RTSP) gặp lỗi không hồi phục sẽ raise `StreamError` — phân biệt rõ với kết thúc bình
-thường (`StopIteration`):
+Kwargs không áp dụng cho loại reader hiện tại sẽ được bỏ qua và log ở mức DEBUG.
+
+## Logging
+
+Library không tự cấu hình logging khi import. App có thể bật logging bằng:
+
+```python
+from media_sources.utils import set_logging
+
+set_logging()
+set_logging(debug=True)
+```
+
+## Xử lý lỗi stream
+
+Stream lỗi không hồi phục sẽ raise `StreamError`.
 
 ```python
 from media_sources import MediaSources, StreamError
-from media_sources.utils import LOGGER
 
 try:
     with MediaSources(["rtsp://cam1"]) as ms:
         for frames, infos in ms:
             model.predict(frames)
-except StreamError as e:
-    LOGGER.error("Stream chết: %s", e)
-    # restart / cảnh báo / ...
+except StreamError as exc:
+    print(f"Stream lỗi: {exc}")
 ```
 
-## Logging
+## Thiết kế bên trong
 
-Library **không** tự cấu hình logging khi import (chỉ gắn `NullHandler`). Muốn log màu, gọi
-`set_logging()` (mặc định INFO) ở phía ứng dụng:
+Project tách thành ba tầng:
 
-```python
-from media_sources.utils import set_logging
-set_logging()            # INFO
-set_logging(debug=True)  # DEBUG
+```text
+BaseReader
+  đọc một nguồn: image, video, webcam, rtsp, youtube
+
+SyncBatchReader
+  gộp nhiều reader tuần tự: image, video, youtube
+
+StreamBatchReader
+  gộp nhiều reader realtime: webcam, rtsp/rtmp
+
+MediaSources
+  wrapper tiện dụng cho pipeline vision, luôn trả frames, infos
 ```
 
-## Định hướng thiết kế
+Điểm chính:
 
-- **Tách reader đơn nguồn khỏi batch orchestrator**: `create_media_source(source)` trả `BaseReader`
-  với interface `open/read/close` độc lập; `create_media_source(list)` bọc thành batch. `MediaSources`
-  là wrapper batch tiện dụng giữ tương thích cũ.
-- **Lazy open**: construct không kết nối; chỉ mở khi `open()` / vào `with` / iterate lần đầu.
-- **Hai chiến lược batch** (chọn tự động theo loại nguồn):
-  - `SyncBatchReader` (image/video/youtube): lockstep, decode song song, **không drop frame**.
-  - `StreamBatchReader` (rtsp/webcam): daemon thread/nguồn, luôn lấy frame mới nhất (drop frame cũ để giữ realtime).
-- Giữ đúng thứ tự đầu vào trong cả `frames` và `infos`.
-- Bền cho pipeline chạy 24/7: timeout chống treo, auto-reconnect RTSP với exponential backoff, dừng thread sạch.
-- Dễ mở rộng nguồn mới (thêm reader + đăng ký vào factory).
+- Mỗi reader chỉ quản lý một nguồn.
+- Batch giữ đúng thứ tự input.
+- Stream realtime lấy frame mới nhất, không tích backlog.
+- Video/image đọc tuần tự, không drop frame.
+- Lazy open để khởi tạo object không làm mở camera ngay.

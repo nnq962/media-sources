@@ -49,9 +49,9 @@ class VideoReader(BaseReader):
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         if self._fps <= 0:
-            LOGGER.warning("FPS không đọc được từ video: %s", src)
+            LOGGER.warning("FPS không đọc được từ video: %s", self._source)
         if self._total_frames <= 0:
-            LOGGER.warning("Số frame không đọc được từ video: %s", src)
+            LOGGER.warning("Số frame không đọc được từ video: %s", self._source)
         LOGGER.info("  → VIDEO | %dx%d | %.1f fps | %d frames | is_stream=False",
                     w, h, self._fps, self._total_frames)
         self._opened = True

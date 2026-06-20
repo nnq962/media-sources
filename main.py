@@ -1,31 +1,52 @@
 from media_sources import MediaSources
 from media_sources.utils import set_logging
 
+import argparse
 import cv2
 import numpy as np
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--show", action="store_true", help="Show frames in a window")
+    args = parser.parse_args()
+
     set_logging()
 
-    sources = ["rtsp://admin:061223%40bC@192.168.0.10:554/Streaming/Channels/101", "rtsp://admin:061223%40bC@192.168.0.15:554/Streaming/Channels/101"] * 3
+    sources = ["rtsp://admin:0612232026camera@192.168.2.50:554/Streaming/Channels/101"] * 3
 
     # sources = [
     # "https://youtu.be/vCIc1g_4JWM?si=Bpb2kriUjQwaGQen",
     # "https://youtu.be/vCIc1g_4JWM?si=Bpb2kriUjQwaGQen",
     # ]
 
-    # sources = ["examples/crowd.mp4"] * 5
+    # sources = ["examples/crowd.mp4", "examples/video.MP4"] * 2
+
+    # sources = [0, 0, 0]
 
     target_h = 480
 
-    with MediaSources(sources, use_gstreamer=True) as ms:
-        for frames, infos in ms:
-            resized_frames = resize_frames_to_height(frames, target_h)
-            draw_frame_labels(resized_frames, infos)
+    with MediaSources(sources, use_gstreamer=False) as ms:
+        for batch_idx, (frames, infos) in enumerate(ms):
+            if args.show:
+                resized_frames = resize_frames_to_height(frames, target_h)
+                draw_frame_labels(resized_frames, infos)
 
-            combined = np.hstack(resized_frames)
-            print(f"combined shape: {combined.shape}")
+                combined = np.hstack(resized_frames)
+                cv2.imshow("Media Sources", combined)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    break
+            else:
+                frame_list = [
+                    f"{info.source_type.name} {frame.shape[1]}x{frame.shape[0]}"
+                    for frame, info in zip(frames, infos)
+                ]
+                print(f"Batch {batch_idx}: [{', '.join(frame_list)}]")
+
+    if args.show:
+        cv2.destroyAllWindows()
 
 
 def resize_frames_to_height(frames: list[np.ndarray], target_h: int) -> list[np.ndarray]:
