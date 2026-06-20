@@ -26,6 +26,8 @@ uv sync
 
 ## Bắt đầu nhanh
 
+### Batch nhiều nguồn — `MediaSources`
+
 ```python
 from media_sources import MediaSources
 from media_sources.utils import set_logging
@@ -45,11 +47,42 @@ Mỗi vòng lặp trả về `(frames, infos)`:
 - `frames`: `list[numpy.ndarray]` (BGR 3-channel), đúng thứ tự nguồn đầu vào.
 - `infos`: `list[SourceMeta]` tương ứng theo index — `frames[i]` ↔ `infos[i]` ↔ `sources[i]`.
 
+### Nguồn đơn — `create_media_source`
+
+`create_media_source()` là factory cấp thấp hơn, trả về một **reader đơn nguồn** (`BaseReader`) hoặc
+batch tùy theo đầu vào. Dùng khi cần tái sử dụng reader độc lập hoặc tích hợp trực tiếp:
+
+```python
+from media_sources import create_media_source
+
+# Nguồn đơn → BaseReader với interface open/read/close
+reader = create_media_source("rtsp://cam1", reconnect_forever=True)
+
+with reader:                              # lazy open: kết nối tại đây
+    result = reader.read()                # trả (frame, SourceMeta) hoặc None khi hết/lỗi
+    if result:
+        frame, meta = result
+        print(meta.resolution, meta.fps)
+
+# Hoặc iterate trực tiếp trên reader đơn
+for frame, meta in create_media_source("video.mp4"):
+    process(frame)
+
+# List nguồn → batch (StreamBatchReader hoặc SyncBatchReader tùy loại)
+batch = create_media_source(["rtsp://cam1", "rtsp://cam2"])
+with batch:
+    for frames, infos in batch:
+        ...
+```
+
+> **Lazy open:** `create_media_source()` và `MediaSources()` **không** kết nối khi khởi tạo —
+> chỉ kết nối khi vào `with`, iterate lần đầu, hoặc gọi `open()` tường minh.
+
 ## Ví dụ theo từng loại nguồn
 
 ```python
 import numpy as np
-from media_sources import MediaSources
+from media_sources import MediaSources, create_media_source
 
 # Ảnh path
 MediaSources(["a.jpg", "b.png"])
@@ -68,6 +101,11 @@ MediaSources(["rtsp://cam1"], use_gstreamer=False)
 
 # YouTube
 MediaSources(["https://youtu.be/vCIc1g_4JWM"])
+
+# Nguồn đơn — reader độc lập tái sử dụng được
+reader = create_media_source("rtsp://cam1")
+with reader:
+    frame, meta = reader.read()
 ```
 
 ## Metadata — `SourceMeta`
@@ -93,7 +131,8 @@ for frames, infos in ms:
 
 ## Tuỳ chọn RTSP
 
-Truyền qua `**kwargs` của `MediaSources` (chỉ áp dụng cho nguồn RTSP):
+Truyền qua `**kwargs` của `MediaSources` hoặc `create_media_source` (kwargs thừa với loại nguồn khác
+được bỏ qua tự động, có log DEBUG):
 
 | kwarg | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -116,8 +155,8 @@ MediaSources(
 
 ## Xử lý lỗi
 
-Stream (webcam/RTSP) gặp lỗi khi đọc sẽ raise `StreamError` — phân biệt rõ với kết thúc bình thường
-(`StopIteration`):
+Stream (webcam/RTSP) gặp lỗi không hồi phục sẽ raise `StreamError` — phân biệt rõ với kết thúc bình
+thường (`StopIteration`):
 
 ```python
 from media_sources import MediaSources, StreamError
@@ -145,7 +184,13 @@ set_logging(debug=True)  # DEBUG
 
 ## Định hướng thiết kế
 
-- Interface thống nhất cho ảnh, video, webcam, RTSP, YouTube; batch ngay từ đầu.
+- **Tách reader đơn nguồn khỏi batch orchestrator**: `create_media_source(source)` trả `BaseReader`
+  với interface `open/read/close` độc lập; `create_media_source(list)` bọc thành batch. `MediaSources`
+  là wrapper batch tiện dụng giữ tương thích cũ.
+- **Lazy open**: construct không kết nối; chỉ mở khi `open()` / vào `with` / iterate lần đầu.
+- **Hai chiến lược batch** (chọn tự động theo loại nguồn):
+  - `SyncBatchReader` (image/video/youtube): lockstep, decode song song, **không drop frame**.
+  - `StreamBatchReader` (rtsp/webcam): daemon thread/nguồn, luôn lấy frame mới nhất (drop frame cũ để giữ realtime).
 - Giữ đúng thứ tự đầu vào trong cả `frames` và `infos`.
-- Bền cho pipeline chạy 24/7: timeout chống treo, auto-reconnect RTSP, dừng thread sạch.
-- Dễ mở rộng nguồn mới (thêm reader + đăng ký).
+- Bền cho pipeline chạy 24/7: timeout chống treo, auto-reconnect RTSP với exponential backoff, dừng thread sạch.
+- Dễ mở rộng nguồn mới (thêm reader + đăng ký vào factory).

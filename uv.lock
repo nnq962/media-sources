@@ -39,7 +39,7 @@ dependencies = [
 requires-dist = [
     { name = "colorlog", specifier = ">=6.10.1" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "opencv-python", path = "../../builds/opencv-python-gstreamer/wheelhouse/opencv_python-4.13.0.92-cp310-cp310-macosx_15_0_arm64.whl" },
+    { name = "opencv-python", path = "../../builds/opencv-python-gstreamer/wheelhouse/opencv_python-4.13.0.92-cp310-cp310-linux_x86_64.whl" },
     { name = "pytz", specifier = ">=2026.2" },
     { name = "yt-dlp", specifier = ">=2026.6.9" },
 ]
@@ -69,12 +69,12 @@ wheels = [
 [[package]]
 name = "opencv-python"
 version = "4.13.0.92"
-source = { path = "../../builds/opencv-python-gstreamer/wheelhouse/opencv_python-4.13.0.92-cp310-cp310-macosx_15_0_arm64.whl" }
+source = { path = "../../builds/opencv-python-gstreamer/wheelhouse/opencv_python-4.13.0.92-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
     { name = "numpy" },
 ]
 wheels = [
-    { filename = "opencv_python-4.13.0.92-cp310-cp310-macosx_15_0_arm64.whl", hash = "sha256:dd91a92fbf3bf7d7701d573905b4c87a180399ea45fe419ccc39a45b27b0e359" },
+    { filename = "opencv_python-4.13.0.92-cp310-cp310-linux_x86_64.whl", hash = "sha256:79323abd4caf34263538384b2af954533a951215f6fb22150fac0f584e3b6a81" },
 ]
 
 [package.metadata]

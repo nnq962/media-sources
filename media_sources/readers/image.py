@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from pathlib import Path
 
@@ -12,46 +14,51 @@ from .base import BaseReader
 
 
 class ImageReader(BaseReader):
-    """Đọc ảnh từ file path hoặc numpy.ndarray. Lặp đúng một lần."""
+    """Đọc MỘT ảnh từ file path hoặc numpy.ndarray. read() trả 1 lần rồi None."""
 
-    def __init__(self, sources: list, **_):
-        self._done = False
-        self._frames, self._metas = self._load(sources)
+    source_type = SourceType.IMAGE
+    is_stream = False
 
-    def _load(self, sources: list) -> tuple[list[np.ndarray], list[SourceMeta]]:
-        """Nạp toàn bộ ảnh vào bộ nhớ ngay khi khởi tạo."""
-        ts = time.time()
-        frames, metas = [], []
-        n = len(sources)
-        for i, src in enumerate(sources):
-            if isinstance(src, np.ndarray):
-                frame = ensure_bgr(src)
-                name = f"array_{i}"
-            else:
-                frame = cv2.imread(str(src))
-                if frame is None:
-                    LOGGER.error("Không đọc được ảnh [%d/%d]: %s", i + 1, n, src)
-                    raise FileNotFoundError(f"Không đọc được ảnh: {src}")
-                frame = ensure_bgr(frame)
-                name = Path(src).name
-            h, w = frame.shape[:2]
-            LOGGER.info("Nạp ảnh [%d/%d]: %s | IMAGE | %dx%d | is_stream=False", i + 1, n, name, w, h)
-            frames.append(frame)
-            metas.append(SourceMeta(
-                name=name,
-                source_type=SourceType.IMAGE,
-                frame_index=0,
-                resolution=(w, h),
-                timestamp=ts,
-            ))
-        LOGGER.info("Đã nạp %d ảnh.", n)
-        return frames, metas
+    def __init__(self, source):
+        super().__init__(source)
+        self._frame: np.ndarray | None = None
+        self._meta: SourceMeta | None = None
 
-    def __next__(self) -> tuple[list[np.ndarray], list[SourceMeta]]:
-        if self._released or self._done:
-            raise StopIteration
-        self._done = True
-        return self._frames, self._metas
+    def open(self) -> "ImageReader":
+        src = self._source
+        if isinstance(src, np.ndarray):
+            frame = ensure_bgr(src)
+            name = "array"
+        else:
+            frame = cv2.imread(str(src))
+            if frame is None:
+                LOGGER.error("Không đọc được ảnh: %s", src)
+                raise FileNotFoundError(f"Không đọc được ảnh: {src}")
+            frame = ensure_bgr(frame)
+            name = Path(str(src)).name
 
-    def release(self) -> None:
-        self._released = True
+        h, w = frame.shape[:2]
+        LOGGER.info("Nạp ảnh: %s | IMAGE | %dx%d | is_stream=False", name, w, h)
+        self._frame = frame
+        self._meta = SourceMeta(
+            name=name,
+            source_type=SourceType.IMAGE,
+            frame_index=0,
+            resolution=(w, h),
+            timestamp=time.time(),
+        )
+        self._opened = True
+        self._frame_index = 0
+        return self
+
+    def read(self) -> tuple[np.ndarray, SourceMeta] | None:
+        self.ensure_open()
+        if self._frame is None or self._frame_index > 0:
+            return None
+        self._frame_index += 1
+        return self._frame, self._meta
+
+    def close(self) -> None:
+        self._frame = None
+        self._meta = None
+        self._opened = False

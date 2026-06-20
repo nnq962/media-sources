@@ -6,33 +6,26 @@ import numpy as np
 
 
 def main() -> None:
-    set_logging()  # bật log màu (INFO); library không tự cấu hình logging khi import
+    set_logging()
 
-    # sources = ["rtsp://admin:0612232026camera@192.168.2.50:554/Streaming/Channels/101"] * 2
+    sources = ["rtsp://admin:061223%40bC@192.168.0.10:554/Streaming/Channels/101", "rtsp://admin:061223%40bC@192.168.0.15:554/Streaming/Channels/101"] * 3
 
     # sources = [
-    #     "https://youtu.be/vCIc1g_4JWM",
-    #     "https://youtu.be/vCIc1g_4JWM",
+    # "https://youtu.be/vCIc1g_4JWM?si=Bpb2kriUjQwaGQen",
+    # "https://youtu.be/vCIc1g_4JWM?si=Bpb2kriUjQwaGQen",
     # ]
 
-    # sources = ["examples/crowd.mp4", "examples/ScreenRecording_04-17-2026 4-31-45 PM_1.MP4"] * 2
-    # sources = ["examples/IMG_0514.JPEG"] * 10
-    sources = [0, 0]
+    # sources = ["examples/crowd.mp4"] * 5
 
     target_h = 480
 
-    with MediaSources(sources, use_gstreamer=False) as ms:
+    with MediaSources(sources, use_gstreamer=True) as ms:
         for frames, infos in ms:
             resized_frames = resize_frames_to_height(frames, target_h)
             draw_frame_labels(resized_frames, infos)
 
             combined = np.hstack(resized_frames)
-            cv2.imshow("Batch Preview", combined)
-
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-    cv2.destroyAllWindows()
+            print(f"combined shape: {combined.shape}")
 
 
 def resize_frames_to_height(frames: list[np.ndarray], target_h: int) -> list[np.ndarray]:
